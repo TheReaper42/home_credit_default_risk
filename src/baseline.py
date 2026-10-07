@@ -193,9 +193,66 @@ compare_folds(res_bureau, res_ratios, "with bureau", "ratios only")
 print(res_bureau.importances["mean"].sort_values(ascending=False).head(20))
 
 # %% [markdown]
+# ## 8. Experiment 5: aggregates from `previous_application`
+# The bureau features gave a clear gain, so this experiment builds on `X_bureau`.
+# Unlike `bureau_balance`, this table has SK_ID_CURR directly: one aggregation level.
+
+# %%
+from previous import build_previous_features
+
+prev_feats = build_previous_features(DATA_DIR)  # indexed by SK_ID_CURR
+print("clients with previous applications:", len(prev_feats))
+
+# %%
+prev_aligned = prev_feats.reindex(df["SK_ID_CURR"].to_numpy())
+prev_aligned.index = df.index
+prev_aligned["PREV_COUNT"] = prev_aligned["PREV_COUNT"].fillna(0)
+
+X_prev = pd.concat([X_bureau, prev_aligned], axis=1)
+assert len(X_prev) == len(X_bureau), "join changed the number of rows"
+print("features:", X_prev.shape[1])
+
+# %%
+res_prev = run_cv(X_prev, y, seed=SEED)
+print(res_prev.summary_row("+ previous_application aggregates"))
+compare_folds(res_prev, res_bureau, "with previous_application", "bureau")
+
+# %%
+print(res_prev.importances["mean"].sort_values(ascending=False).head(20))
+
+# %% [markdown]
+# ## 9. Experiment 6: aggregates from `installments_payments`
+# Builds on `X_prev`. The table is large (~13.6M rows), so loading and aggregating
+# takes a while; the key features are days past due and underpaid amounts.
+
+# %%
+from installments import build_installments_features
+
+inst_feats = build_installments_features(DATA_DIR)  # indexed by SK_ID_CURR
+print("clients with instalment records:", len(inst_feats))
+
+# %%
+inst_aligned = inst_feats.reindex(df["SK_ID_CURR"].to_numpy())
+inst_aligned.index = df.index
+inst_aligned["INST_COUNT"] = inst_aligned["INST_COUNT"].fillna(0)
+
+X_inst = pd.concat([X_prev, inst_aligned], axis=1)
+assert len(X_inst) == len(X_prev), "join changed the number of rows"
+print("features:", X_inst.shape[1])
+
+# %%
+res_inst = run_cv(X_inst, y, seed=SEED)
+print(res_inst.summary_row("+ installments_payments aggregates"))
+compare_folds(res_inst, res_prev, "with installments", "previous_application")
+
+# %%
+print(res_inst.importances["mean"].sort_values(ascending=False).head(20))
+
+# %% [markdown]
 # ## Next steps
-# 1. Record every result row in the README table (external-score groups: discarded).
-# 2. If the bureau gain is clear, run an ablation per feature group and drop the
-#    groups that do not help.
-# 3. Move on to `previous_application`, `installments_payments`, `POS_CASH_balance`
-#    and `credit_card_balance`.
+# 1. Record every result row in the README table.
+# 2. Keep a table only if its gain is stable (better in most folds, mean difference
+#    above roughly 0.002-0.003).
+# 3. Move on to `POS_CASH_balance` and `credit_card_balance` (they carry SK_ID_CURR
+#    directly, so they can be aggregated straight to clients).
+# 4. Run an ablation per feature group (for example without `BUREAU_BB_*`).

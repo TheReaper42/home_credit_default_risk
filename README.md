@@ -4,8 +4,9 @@ A study project based on the Kaggle competition
 [Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk):
 predict the probability that a loan applicant will have repayment difficulties.
 
-**Status:** work in progress. Currently only `application_train.csv` is used;
-the other six tables are the next step.
+**Status:** work in progress. `application_train.csv`, `bureau`,
+`bureau_balance`, `previous_application` and `installments_payments` are used so far;
+`POS_CASH_balance` and `credit_card_balance` are the next step.
 
 ## Goal
 
@@ -22,7 +23,8 @@ measured against the previous version.
   `TARGET` (1 = payment difficulties). The classes are heavily imbalanced
   (roughly 8% positives).
 - Seven related tables in total (bureau history, previous applications,
-  instalments, card balances). Only the main table is used so far.
+  instalments, card balances). So far: the main table, `bureau`, `bureau_balance`, `previous_application` and
+  `installments_payments`.
 
 ## Method
 
@@ -50,11 +52,26 @@ the real number). No tuning has been done yet.
 | 4 | + EXT_SOURCE product (cumulative) | 0.7668 ± 0.0042 | 0.7668 |
 | 5 | + EXT_SOURCE weighted mean (cumulative) | 0.7673 ± 0.0041 | 0.7673 |
 | 6 | + EXT_SOURCE missing count (cumulative) | 0.7669 ± 0.0043 | 0.7669 |
+| 7 | + bureau / bureau_balance aggregates (on top of 2) | 0.7732 ± 0.0039 | 0.7732 |
+| 8 | + previous_application aggregates (on top of 7) | 0.7781 ± 0.0034 | 0.7780 |
+| 9 | + installments_payments aggregates (on top of 8) | 0.7829 ± 0.0024 | 0.7829 |
 
 Rows 3-6 add feature groups one after another on top of experiment 2. None of them
 gave a stable gain (mean differences between consecutive steps are between -0.0004
 and +0.0005, within the noise), so all external-score combinations were discarded
 and experiment 2 remains the working feature set.
+
+Experiment 7 is built on experiment 2 (not on 3-6). Compared with experiment 2 it
+adds **+0.0061 CV AUC** and is better in 5 of 5 folds, so it is kept. Cumulative gain
+over the raw baseline is about +0.014.
+
+Experiment 8 adds the `previous_application` aggregates on top of experiment 7:
+**+0.0048 CV AUC**, better in 5 of 5 folds, so it is kept (about +0.019 over the raw
+baseline in total).
+
+Experiment 9 adds the `installments_payments` aggregates on top of experiment 8:
+**+0.0049 CV AUC**, better in 5 of 5 folds, so it is kept (about +0.024 over the raw
+baseline in total).
 
 The ratio features add about **+0.0078 CV AUC**. The fold-to-fold standard deviation
 is about 0.005, but all experiments share the same folds, so the comparison is
@@ -86,6 +103,25 @@ Ratio features used in experiment 2:
   `EXT_SOURCE_3` dropped about fivefold), yet CV AUC did not improve. The trees simply
   switched to a new feature that carries the same information as the three originals.
   This is another example of why feature importance is not evidence of a real gain.
+- The `bureau` aggregates are a real gain. Several of them (`BUREAU_DEBT_CREDIT_RATIO`,
+  `BUREAU_DAYS_CREDIT_MAX`, `BUREAU_MAX_OVERDUE_MAX`) rank in the top 15 by gain while
+  the importance of the external scores stays at a similar level, so the new features
+  add information instead of replacing existing ones. None of the monthly-status
+  (`BUREAU_BB_*`) features reached the top 20; their contribution has not been
+  ablated yet.
+- The `previous_application` aggregates are also a real gain, although smaller than
+  the `bureau` one (+0.0048 vs +0.0061): each additional table adds less. Eight new
+  features reached the top 20 by gain, led by `PREV_APP_CREDIT_RATIO_MEAN` (ratio of
+  requested to granted amount), followed by `PREV_CNT_PAYMENT_MEAN`,
+  `PREV_ANNUITY_MEAN` and `PREV_REFUSED_SHARE`. The fold-to-fold standard deviation
+  of CV AUC decreased from 0.0039 to 0.0034.
+- The `installments_payments` aggregates add a similar gain (+0.0049), so the gain
+  per table has stayed roughly constant (+0.0061, +0.0048, +0.0049). The standard
+  deviation across folds dropped further, from 0.0034 to 0.0024. The recent-window
+  feature `INST_DPD_MEAN_RECENT` (average days past due over the last year) ranks 9th
+  by gain, ahead of `DAYS_BIRTH`, while the all-time `INST_DPD_MEAN` is not in the top
+  20: recent payment behaviour appears more informative than the full history.
+  `INST_LATE_SHARE` is also in the top 20.
 
 ## How to run
 
@@ -106,9 +142,10 @@ Ratio features used in experiment 2:
 
 - [x] Combinations of the external scores (mean, min, max, std, product, weighted
       mean, missing count): no gain, discarded
-- [ ] Aggregates from `bureau` and `bureau_balance`
-- [ ] Aggregates from `previous_application`, `installments_payments`,
-      `POS_CASH_balance` and `credit_card_balance`
+- [x] Aggregates from `bureau` and `bureau_balance` (+0.0061 CV AUC)
+- [x] Aggregates from `previous_application` (+0.0048 CV AUC)
+- [x] Aggregates from `installments_payments` (+0.0049 CV AUC)
+- [ ] Aggregates from `POS_CASH_balance` and `credit_card_balance`
 - [ ] Hyperparameter tuning (Optuna)
 - [ ] Model interpretation with SHAP
 - [ ] Feature aggregation in SQL (DuckDB) as an alternative to Pandas

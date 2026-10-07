@@ -78,7 +78,8 @@ def run_cv(
         model.fit(
             X_tr,
             y_tr,
-            eval_set=[(X_va, y_va)],
+            eval_X=X_va,
+            eval_y=y_va,
             eval_metric="auc",
             callbacks=[
                 lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=False),
