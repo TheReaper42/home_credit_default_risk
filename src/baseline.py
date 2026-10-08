@@ -163,10 +163,10 @@ for name, res in ext_results.items():
 print(prev_res.importances["mean"].sort_values(ascending=False).head(20))
 
 # %% [markdown]
-# ## 7. Experiment 4: aggregates from `bureau` and `bureau_balance`
+# ## 7. Experiment 4: aggregates from `bureau`
 # The external-score combinations gave no gain, so this experiment builds on
-# `X_ratios`. The aggregation follows the table hierarchy (see `bureau.py`):
-# months -> credit (SK_ID_BUREAU) -> client (SK_ID_CURR).
+# `X_ratios`. (An earlier version also aggregated `bureau_balance`; the ablation
+# showed that it added nothing measurable, so it was removed.)
 
 # %%
 from bureau import build_bureau_features
@@ -249,10 +249,123 @@ compare_folds(res_inst, res_prev, "with installments", "previous_application")
 print(res_inst.importances["mean"].sort_values(ascending=False).head(20))
 
 # %% [markdown]
+# ## 10. Experiment 7: aggregates from `POS_CASH_balance`
+# Builds on `X_inst`. Monthly records of point-of-sale and cash loans (~10M rows).
+
+# %%
+from pos_cash import build_pos_cash_features
+
+pos_feats = build_pos_cash_features(DATA_DIR)  # indexed by SK_ID_CURR
+print("clients with POS_CASH records:", len(pos_feats))
+
+# %%
+pos_aligned = pos_feats.reindex(df["SK_ID_CURR"].to_numpy())
+pos_aligned.index = df.index
+pos_aligned["POS_COUNT"] = pos_aligned["POS_COUNT"].fillna(0)
+pos_aligned["POS_LOANS"] = pos_aligned["POS_LOANS"].fillna(0)
+
+X_pos = pd.concat([X_inst, pos_aligned], axis=1)
+assert len(X_pos) == len(X_inst), "join changed the number of rows"
+print("features:", X_pos.shape[1])
+
+# %%
+res_pos = run_cv(X_pos, y, seed=SEED)
+print(res_pos.summary_row("+ POS_CASH_balance aggregates"))
+compare_folds(res_pos, res_inst, "with POS_CASH", "installments")
+
+# %%
+print(res_pos.importances["mean"].sort_values(ascending=False).head(20))
+
+# %% [markdown]
+# ## 11. Experiment 8: aggregates from `credit_card_balance`
+# Monthly records of credit cards (~3.8M rows). Many clients have no card at all,
+# so most rows will have NaN here; that is expected.
+# Build on `X_pos` if the POS_CASH gain was stable; otherwise switch the base below
+# to `X_inst` / `res_inst`.
+
+# %%
+from credit_card import build_credit_card_features
+
+X_cc_base, res_cc_base = X_pos, res_pos
+
+cc_feats = build_credit_card_features(DATA_DIR)  # indexed by SK_ID_CURR
+print("clients with credit card records:", len(cc_feats))
+
+# %%
+cc_aligned = cc_feats.reindex(df["SK_ID_CURR"].to_numpy())
+cc_aligned.index = df.index
+cc_aligned["CC_COUNT"] = cc_aligned["CC_COUNT"].fillna(0)
+cc_aligned["CC_CARDS"] = cc_aligned["CC_CARDS"].fillna(0)
+
+X_cc = pd.concat([X_cc_base, cc_aligned], axis=1)
+assert len(X_cc) == len(X_cc_base), "join changed the number of rows"
+print("features:", X_cc.shape[1])
+
+# %%
+res_cc = run_cv(X_cc, y, seed=SEED)
+print(res_cc.summary_row("+ credit_card_balance aggregates"))
+compare_folds(res_cc, res_cc_base, "with credit card", "previous step")
+
+# %%
+print(res_cc.importances["mean"].sort_values(ascending=False).head(20))
+
+# %% [markdown]
+# ## 12. Ablation: contribution of each feature group
+# Each group is dropped in turn from the full model (`X_cc`) and the CV is re-run
+# with the same folds. Six extra CV runs, so this takes a while.
+
+# %%
+from ablation import columns_with_prefix, run_ablation
+
+cols = X_cc.columns
+feature_groups = {
+    "ratios": RATIO_COLS,
+    "bureau": columns_with_prefix(cols, "BUREAU_"),
+    "previous_application": columns_with_prefix(cols, "PREV_"),
+    "installments": columns_with_prefix(cols, "INST_"),
+    "pos_cash": columns_with_prefix(cols, "POS_"),
+    "credit_card": columns_with_prefix(cols, "CC_"),
+}
+for name, group_cols in feature_groups.items():
+    print(f"{name}: {len(group_cols)} features")
+
+# Sanity check: the groups must cover exactly the engineered columns
+covered = sum(len(c) for c in feature_groups.values())
+assert covered == X_cc.shape[1] - X_base.shape[1], "groups do not match the columns"
+
+# %%
+ablation = run_ablation(X_cc, y, feature_groups, reference=res_cc, seed=SEED)
+print()
+print(ablation.round(5))
+
+# %% [markdown]
+# ## 13. Hyperparameter tuning with Optuna
+# The search runs on the final feature set `X_cc` with a higher learning rate for
+# speed (see `tune.py`). The best CV score over many trials is optimistically biased,
+# so the final comparison below uses a different fold split.
+
+# %%
+from tune import run_study
+
+study = run_study(X_cc, y, n_trials=40, seed=SEED)
+print("best CV AUC in the search:", round(study.best_value, 5))
+print(study.best_params)
+
+# %%
+# Fair evaluation on a NEW fold split: default vs tuned parameters, same learning rate.
+EVAL_SEED = 2024
+FINAL_LR = 0.05
+
+res_default = run_cv(X_cc, y, params={"learning_rate": FINAL_LR}, seed=EVAL_SEED)
+res_tuned = run_cv(
+    X_cc, y, params={**study.best_params, "learning_rate": FINAL_LR}, seed=EVAL_SEED
+)
+print(res_default.summary_row("Default parameters (new fold split)"))
+print(res_tuned.summary_row("Tuned parameters (new fold split)"))
+compare_folds(res_tuned, res_default, "tuned", "default")
+
+# %% [markdown]
 # ## Next steps
-# 1. Record every result row in the README table.
-# 2. Keep a table only if its gain is stable (better in most folds, mean difference
-#    above roughly 0.002-0.003).
-# 3. Move on to `POS_CASH_balance` and `credit_card_balance` (they carry SK_ID_CURR
-#    directly, so they can be aggregated straight to clients).
-# 4. Run an ablation per feature group (for example without `BUREAU_BB_*`).
+# 1. Record the tuning result in the README (best parameters and the comparison).
+# 2. Optionally lower the learning rate (for example 0.02-0.03) for the final model.
+# 3. SHAP analysis of the final model.

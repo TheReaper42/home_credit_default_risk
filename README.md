@@ -4,9 +4,9 @@ A study project based on the Kaggle competition
 [Home Credit Default Risk](https://www.kaggle.com/c/home-credit-default-risk):
 predict the probability that a loan applicant will have repayment difficulties.
 
-**Status:** work in progress. `application_train.csv`, `bureau`,
-`bureau_balance`, `previous_application` and `installments_payments` are used so far;
-`POS_CASH_balance` and `credit_card_balance` are the next step.
+**Status:** work in progress. Six of the seven data tables are used
+(`bureau_balance` was dropped after the ablation); the next steps are hyperparameter
+tuning and a SHAP analysis of the final model.
 
 ## Goal
 
@@ -23,8 +23,7 @@ measured against the previous version.
   `TARGET` (1 = payment difficulties). The classes are heavily imbalanced
   (roughly 8% positives).
 - Seven related tables in total (bureau history, previous applications,
-  instalments, card balances). So far: the main table, `bureau`, `bureau_balance`, `previous_application` and
-  `installments_payments`.
+  instalments, card balances). All except `bureau_balance` are used (see the ablation section).
 
 ## Method
 
@@ -55,6 +54,8 @@ the real number). No tuning has been done yet.
 | 7 | + bureau / bureau_balance aggregates (on top of 2) | 0.7732 ± 0.0039 | 0.7732 |
 | 8 | + previous_application aggregates (on top of 7) | 0.7781 ± 0.0034 | 0.7780 |
 | 9 | + installments_payments aggregates (on top of 8) | 0.7829 ± 0.0024 | 0.7829 |
+| 10 | + POS_CASH_balance aggregates (on top of 9) | 0.7846 ± 0.0034 | 0.7846 |
+| 11 | + credit_card_balance aggregates (on top of 10) | 0.7872 ± 0.0029 | 0.7871 |
 
 Rows 3-6 add feature groups one after another on top of experiment 2. None of them
 gave a stable gain (mean differences between consecutive steps are between -0.0004
@@ -73,6 +74,13 @@ Experiment 9 adds the `installments_payments` aggregates on top of experiment 8:
 **+0.0049 CV AUC**, better in 5 of 5 folds, so it is kept (about +0.024 over the raw
 baseline in total).
 
+Experiment 10 adds `POS_CASH_balance`: +0.0017 CV AUC, better in 4 of 5 folds. This
+is below the 0.002-0.003 noise threshold, so the gain is not convincing; whether to
+keep these features has to be decided by an ablation (run without them and compare).
+Experiment 11 adds `credit_card_balance` on top: +0.0026, again better in 4 of 5
+folds, a borderline gain. With all tables the pipeline reaches 0.7872 CV AUC, about
++0.028 over the raw baseline.
+
 The ratio features add about **+0.0078 CV AUC**. The fold-to-fold standard deviation
 is about 0.005, but all experiments share the same folds, so the comparison is
 paired. Differences below roughly 0.002-0.003 are treated as noise.
@@ -84,6 +92,36 @@ Ratio features used in experiment 2:
 - `CREDIT_ANNUITY_RATIO`: credit amount / annuity (approximate loan term)
 - `GOODS_PRICE_CREDIT_RATIO`: goods price / credit amount
 - `EMPLOYED_BIRTH_RATIO`: days employed / age in days
+
+## Ablation
+
+Each feature group was removed in turn from the full model (CV AUC 0.7872, 198
+features) and the CV was re-run with the same folds, so every difference is a paired
+comparison. This measures the marginal contribution of a group given all the others.
+
+| Group removed | Features | CV AUC without it | Change | Folds worse |
+|---------------|----------|-------------------|--------|-------------|
+| `bureau` | 13 | 0.7844 | -0.0029 | 5/5 |
+| `installments_payments` | 12 | 0.7844 | -0.0028 | 5/5 |
+| ratio features | 5 | 0.7846 | -0.0027 | 5/5 |
+| `credit_card_balance` | 17 | 0.7846 | -0.0026 | 4/5 |
+| `previous_application` | 16 | 0.7847 | -0.0025 | 5/5 |
+| `POS_CASH_balance` | 12 | 0.7861 | -0.0011 | 4/5 |
+| `bureau_balance` | 3 | 0.7871 | -0.0001 | 4/5 |
+| `POS_CASH_balance` + `bureau_balance` together | 15 | 0.7857 | -0.0015 | 5/5 |
+
+- Five groups contribute about 0.0025-0.0029 each. Their contribution in the full
+  model is smaller than the gain they gave when they were first added (for example
+  `bureau`: +0.0061 when added, -0.0029 when removed from the full model), because
+  the groups partly carry overlapping information about the client's credit history.
+- `bureau_balance` has a negligible effect (-0.0001) although it is the heaviest part
+  of the pipeline (about 27M rows). It is the obvious candidate to drop for a lighter
+  pipeline. `POS_CASH_balance` adds a little (-0.0011 when removed).
+- Removing both weak groups together costs -0.0015 and is worse in all 5 folds,
+  slightly more than the sum of the individual effects (-0.0012). The effect is small
+  but consistent. Decision: `bureau_balance` is dropped from the final pipeline (the
+  heaviest table, no measurable gain), `POS_CASH_balance` is kept. All numbers in the
+  results and ablation tables above were measured before this change.
 
 ## Observations
 
@@ -107,8 +145,8 @@ Ratio features used in experiment 2:
   `BUREAU_DAYS_CREDIT_MAX`, `BUREAU_MAX_OVERDUE_MAX`) rank in the top 15 by gain while
   the importance of the external scores stays at a similar level, so the new features
   add information instead of replacing existing ones. None of the monthly-status
-  (`BUREAU_BB_*`) features reached the top 20; their contribution has not been
-  ablated yet.
+  (`BUREAU_BB_*`) features reached the top 20; their contribution turned
+  out to be negligible (see the ablation section).
 - The `previous_application` aggregates are also a real gain, although smaller than
   the `bureau` one (+0.0048 vs +0.0061): each additional table adds less. Eight new
   features reached the top 20 by gain, led by `PREV_APP_CREDIT_RATIO_MEAN` (ratio of
@@ -122,12 +160,19 @@ Ratio features used in experiment 2:
   by gain, ahead of `DAYS_BIRTH`, while the all-time `INST_DPD_MEAN` is not in the top
   20: recent payment behaviour appears more informative than the full history.
   `INST_LATE_SHARE` is also in the top 20.
+- The last two tables show diminishing returns: +0.0017 (`POS_CASH_balance`) and
+  +0.0026 (`credit_card_balance`) against roughly +0.005 for each of the three tables
+  before. Only about 104k clients have credit card records, compared with about 340k
+  for most other tables, which limits what this table can add.
+  `POS_CNT_INSTALMENT_FUTURE_MEAN` ranks 9th by gain after the `POS_CASH_balance` step
+  even though that step's CV gain is small, another reminder that importance is not
+  the same as gain.
 
 ## How to run
 
 1. Create an environment and install dependencies:
    ```bash
-   pip install lightgbm scikit-learn pandas numpy
+   pip install lightgbm scikit-learn pandas numpy optuna
    ```
 2. Download the competition data (requires a Kaggle account, an API token and
    accepting the competition rules):
@@ -145,11 +190,12 @@ Ratio features used in experiment 2:
 - [x] Aggregates from `bureau` and `bureau_balance` (+0.0061 CV AUC)
 - [x] Aggregates from `previous_application` (+0.0048 CV AUC)
 - [x] Aggregates from `installments_payments` (+0.0049 CV AUC)
-- [ ] Aggregates from `POS_CASH_balance` and `credit_card_balance`
+- [x] Aggregates from `POS_CASH_balance` (+0.0017 CV AUC, below the noise threshold)
+- [x] Aggregates from `credit_card_balance` (+0.0026 CV AUC, borderline)
 - [ ] Hyperparameter tuning (Optuna)
 - [ ] Model interpretation with SHAP
 - [ ] Feature aggregation in SQL (DuckDB) as an alternative to Pandas
-- [ ] Ablation study per feature group
+- [x] Ablation study per feature group
 
 ## References
 

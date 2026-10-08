@@ -7,6 +7,7 @@ experiments can be compared fold by fold with `compare_folds`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import lightgbm as lgb
 import numpy as np
@@ -56,12 +57,16 @@ def run_cv(
     seed: int = 42,
     early_stopping_rounds: int = 100,
     verbose: bool = True,
+    on_fold: Callable[[int, list[float]], None] | None = None,
 ) -> CVResult:
     """Stratified K-fold CV with LightGBM; returns per-fold AUCs, OOF predictions
     and feature importances.
 
     The same `seed` always produces the same folds, so results of different
     experiments are directly comparable fold by fold.
+
+    `on_fold(fold, fold_aucs)`, if given, is called after every finished fold
+    (used for early pruning during hyperparameter search).
     """
     model_params = {**DEFAULT_PARAMS, **(params or {}), "random_state": seed}
 
@@ -78,8 +83,7 @@ def run_cv(
         model.fit(
             X_tr,
             y_tr,
-            eval_X=X_va,
-            eval_y=y_va,
+            eval_set=[(X_va, y_va)],
             eval_metric="auc",
             callbacks=[
                 lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=False),
@@ -93,6 +97,8 @@ def run_cv(
         importances[f"fold_{fold}"] = model.feature_importances_
         if verbose:
             print(f"fold {fold}: AUC = {auc:.5f} (iters: {model.best_iteration_})")
+        if on_fold is not None:
+            on_fold(fold, fold_aucs)
 
     importances["mean"] = importances.mean(axis=1)
     result = CVResult(

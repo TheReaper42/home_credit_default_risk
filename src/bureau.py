@@ -1,18 +1,16 @@
-"""Client-level aggregates from `bureau` and `bureau_balance`.
+"""Client-level aggregates from `bureau`.
 
-Table hierarchy (one row per ...):
-    bureau_balance : credit x month   (key: SK_ID_BUREAU)
-    bureau         : credit           (keys: SK_ID_BUREAU, SK_ID_CURR)
-    application    : client           (key: SK_ID_CURR)
+One row per credit reported by other institutions (~1.7M rows). The table carries
+SK_ID_CURR directly, so one aggregation level is enough:
+    credit -> client (SK_ID_CURR)
 
-Aggregation must follow the same chain: months -> credit -> client.
-Never join `bureau_balance` straight to clients: it has no SK_ID_CURR, and
-skipping a level would mix months of different credits together.
+Note: `bureau_balance` (monthly statuses of these credits, ~27M rows) was tested
+earlier and removed. The feature-group ablation showed no measurable contribution
+(-0.0001 CV AUC), while it was by far the heaviest part of the pipeline.
 """
 
 from __future__ import annotations
 
-import gc
 from pathlib import Path
 
 import numpy as np
@@ -32,39 +30,9 @@ BUREAU_COLS = [
 ]
 
 
-def aggregate_bureau_balance(bb: pd.DataFrame) -> pd.DataFrame:
-    """Level 1: months -> one row per credit (index: SK_ID_BUREAU).
-
-    STATUS values: 'C' closed, 'X' unknown, '0' no delay, '1'..'5' increasing delay.
-    """
-    # Map the (few) status categories to numbers, then index by category codes;
-    # much faster than mapping 27M strings. 'C' and 'X' become NaN.
-    cats = bb["STATUS"].cat.categories
-    num_by_code = np.array(
-        [float(c) if c.isdigit() else np.nan for c in cats], dtype="float32"
-    )
-    status_num = num_by_code[bb["STATUS"].cat.codes.to_numpy()]
-
-    tmp = pd.DataFrame(
-        {
-            "SK_ID_BUREAU": bb["SK_ID_BUREAU"].to_numpy(),
-            "MONTHS_BALANCE": bb["MONTHS_BALANCE"].to_numpy(),
-            "STATUS_NUM": status_num,
-        }
-    )
-    tmp["IS_DPD"] = (tmp["STATUS_NUM"] >= 1).astype("float32")  # NaN >= 1 is False
-
-    return tmp.groupby("SK_ID_BUREAU").agg(
-        BB_MONTHS_COUNT=("MONTHS_BALANCE", "size"),
-        BB_MONTHS_MIN=("MONTHS_BALANCE", "min"),  # how long ago the record starts
-        BB_DPD_SHARE=("IS_DPD", "mean"),  # share of months with any delay
-        BB_STATUS_MAX=("STATUS_NUM", "max"),  # worst delay status
-    )
-
-
-def aggregate_bureau(bureau: pd.DataFrame, bb_agg: pd.DataFrame) -> pd.DataFrame:
-    """Level 2: credits (+ their monthly summary) -> one row per client."""
-    b = bureau.merge(bb_agg, left_on="SK_ID_BUREAU", right_index=True, how="left")
+def aggregate_bureau(bureau: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate credits to one row per client (index: SK_ID_CURR)."""
+    b = bureau  # modified in place to save memory; the caller does not reuse it
     b["IS_ACTIVE"] = (b["CREDIT_ACTIVE"] == "Active").astype("float32")
 
     out = b.groupby("SK_ID_CURR").agg(
@@ -80,9 +48,6 @@ def aggregate_bureau(bureau: pd.DataFrame, bb_agg: pd.DataFrame) -> pd.DataFrame
         BUREAU_DAY_OVERDUE_MAX=("CREDIT_DAY_OVERDUE", "max"),
         BUREAU_MAX_OVERDUE_MAX=("AMT_CREDIT_MAX_OVERDUE", "max"),
         BUREAU_PROLONG_SUM=("CNT_CREDIT_PROLONG", "sum"),
-        BUREAU_BB_DPD_SHARE_MEAN=("BB_DPD_SHARE", "mean"),
-        BUREAU_BB_STATUS_MAX=("BB_STATUS_MAX", "max"),
-        BUREAU_BB_MONTHS_MEAN=("BB_MONTHS_COUNT", "mean"),
     )
     out["BUREAU_DEBT_CREDIT_RATIO"] = (
         out["BUREAU_DEBT_SUM"] / out["BUREAU_CREDIT_SUM_SUM"]
@@ -91,22 +56,10 @@ def aggregate_bureau(bureau: pd.DataFrame, bb_agg: pd.DataFrame) -> pd.DataFrame
 
 
 def build_bureau_features(data_dir: Path) -> pd.DataFrame:
-    """Read both tables and return client-level features (index: SK_ID_CURR)."""
-    data_dir = Path(data_dir)
-
+    """Read the table and return client-level features (index: SK_ID_CURR)."""
     bureau = pd.read_csv(
-        data_dir / "bureau.csv",
+        Path(data_dir) / "bureau.csv",
         usecols=BUREAU_COLS,
         dtype={"SK_ID_CURR": "int32", "SK_ID_BUREAU": "int32"},
     )
-    # bureau_balance has ~27M rows: use compact dtypes to keep memory low
-    bb = pd.read_csv(
-        data_dir / "bureau_balance.csv",
-        dtype={"SK_ID_BUREAU": "int32", "MONTHS_BALANCE": "int16", "STATUS": "category"},
-    )
-
-    bb_agg = aggregate_bureau_balance(bb)
-    del bb
-    gc.collect()
-
-    return aggregate_bureau(bureau, bb_agg)
+    return aggregate_bureau(bureau)
