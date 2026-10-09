@@ -365,7 +365,53 @@ print(res_tuned.summary_row("Tuned parameters (new fold split)"))
 compare_folds(res_tuned, res_default, "tuned", "default")
 
 # %% [markdown]
+# ## 14. Model interpretation: SHAP values
+# The final model is trained on all rows with the tuned parameters and a fixed
+# number of trees. SHAP values come from LightGBM itself (see `explain.py`).
+# If the kernel was restarted, reload the study first:
+# `study = run_study(X_cc, y, n_trials=0)`.
+
+# %%
+from explain import (
+    check_additivity,
+    fit_final_model,
+    plot_beeswarm,
+    plot_dependence,
+    plot_importance,
+    shap_values,
+    top_numeric_features,
+)
+
+# About 1.1x the mean best iteration of the tuned CV run (~830 trees at lr 0.05)
+FINAL_N_ESTIMATORS = 900
+final_model = fit_final_model(
+    X_cc, y, study.best_params, FINAL_N_ESTIMATORS, learning_rate=FINAL_LR, seed=SEED
+)
+
+# %%
+# SHAP on a random sample of the training rows (all rows would be slow)
+X_shap = X_cc.sample(n=20000, random_state=SEED)
+shap_vals, base_value = shap_values(final_model, X_shap)
+print("max additivity error:", check_additivity(final_model, X_shap, shap_vals, base_value))
+
+# %%
+fig_importance = plot_importance(shap_vals, top=20, path="figures/shap_importance.png")
+print(shap_vals.abs().mean().sort_values(ascending=False).head(20))
+
+# %%
+fig_beeswarm = plot_beeswarm(shap_vals, X_shap, top=15, path="figures/shap_beeswarm.png")
+
+# %%
+fig_dependence = plot_dependence(
+    shap_vals,
+    X_shap,
+    top_numeric_features(shap_vals, X_shap, n=4),
+    path="figures/shap_dependence.png",
+)
+
+# %% [markdown]
 # ## Next steps
-# 1. Record the tuning result in the README (best parameters and the comparison).
+# 1. Record the tuning result and the SHAP findings in the README (the figures are
+#    saved in `figures/`).
 # 2. Optionally lower the learning rate (for example 0.02-0.03) for the final model.
-# 3. SHAP analysis of the final model.
+# 3. Build the feature pipeline for `application_test` and submit to Kaggle.

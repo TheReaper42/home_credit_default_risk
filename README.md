@@ -5,8 +5,8 @@ A study project based on the Kaggle competition
 predict the probability that a loan applicant will have repayment difficulties.
 
 **Status:** work in progress. Six of the seven data tables are used
-(`bureau_balance` was dropped after the ablation); the next steps are hyperparameter
-tuning and a SHAP analysis of the final model.
+(`bureau_balance` was dropped after the ablation); hyperparameters were tuned
+with Optuna and the final model was analysed with SHAP.
 
 ## Goal
 
@@ -39,7 +39,8 @@ measured against the previous version.
 
 Main hyperparameters: `learning_rate=0.05`, `num_leaves=31`, `subsample=0.8`,
 `colsample_bytree=0.8`, `reg_lambda=1.0`, up to 5000 trees (early stopping decides
-the real number). No tuning has been done yet.
+the real number). These defaults were used in the experiments above; tuned values
+are given in the "Hyperparameter tuning" section.
 
 ## Results
 
@@ -95,7 +96,8 @@ Ratio features used in experiment 2:
 
 ## Ablation
 
-Each feature group was removed in turn from the full model (CV AUC 0.7872, 198
+**Round 1 (with `bureau_balance` in the pipeline).** Each feature group was removed
+in turn from the full model (CV AUC 0.7872, 198
 features) and the CV was re-run with the same folds, so every difference is a paired
 comparison. This measures the marginal contribution of a group given all the others.
 
@@ -122,6 +124,107 @@ comparison. This measures the marginal contribution of a group given all the oth
   but consistent. Decision: `bureau_balance` is dropped from the final pipeline (the
   heaviest table, no measurable gain), `POS_CASH_balance` is kept. All numbers in the
   results and ablation tables above were measured before this change.
+
+**Round 2 (final pipeline, without `bureau_balance`, 195 features).** The same
+ablation on the final feature set, whose CV AUC is 0.7871 (seed 42):
+
+| Group removed | Features | CV AUC without it | Change | Folds worse |
+|---------------|----------|-------------------|--------|-------------|
+| ratio features | 5 | 0.7839 | -0.0032 | 5/5 |
+| `installments_payments` | 12 | 0.7842 | -0.0029 | 5/5 |
+| `bureau` | 13 | 0.7843 | -0.0029 | 5/5 |
+| `previous_application` | 16 | 0.7848 | -0.0024 | 5/5 |
+| `credit_card_balance` | 17 | 0.7849 | -0.0022 | 5/5 |
+| `POS_CASH_balance` | 12 | 0.7857 | -0.0014 | 5/5 |
+
+Every remaining group hurts the model in all 5 folds when removed, by 0.0014-0.0032.
+`POS_CASH_balance`, which looked like a candidate to drop in round 1, now shows a
+consistent loss (-0.0014 in 5 of 5 folds), so it stays. The five ratio features are
+the most valuable group per feature.
+
+## Hyperparameter tuning
+
+Optuna (TPE sampler, median pruner) searched seven LightGBM parameters on the final
+feature set: `num_leaves`, `min_child_samples`, `colsample_bytree`, `subsample`,
+`reg_alpha`, `reg_lambda` and `cat_smooth`. The search used a learning rate of 0.1
+for speed and ran 120 trials in three runs of 40 (each run continued the same study; many trials
+were pruned early). The first trial was a configuration close to the defaults, as a
+reference.
+
+Best parameters:
+
+| Parameter | Value |
+|-----------|-------|
+| `num_leaves` | 16 |
+| `min_child_samples` | 251 |
+| `colsample_bytree` | 0.842 |
+| `subsample` | 0.867 |
+| `reg_alpha` | 7.99 |
+| `reg_lambda` | 13.2 |
+| `cat_smooth` | 76.0 |
+
+The best search score (0.7890 at learning rate 0.1) is the maximum over many trials
+on the same folds, so it is optimistic. The fair comparison uses a new fold split
+(seed 2024) and the final learning rate 0.05:
+
+| Parameters | CV AUC | OOF AUC |
+|------------|--------|---------|
+| Default | 0.7873 ± 0.0027 | 0.7873 |
+| Tuned | 0.7896 ± 0.0023 | 0.7896 |
+
+Tuning adds **+0.0024 CV AUC**, better in 5 of 5 folds. The estimate did not improve
+with more trials: after 40, 80 and 120 trials the gain on the new split was +0.0022,
++0.0026 and +0.0024, which is within the noise, even though the best search score kept
+creeping up (it is a maximum over trials and does not carry over). The best
+configurations use small trees (`num_leaves` at the lower edge of the search range)
+and strong regularization, which is consistent with a problem with a weak signal.
+Tuning gives a smaller gain than adding the data tables did (roughly +0.005 for each
+of the three largest ones).
+
+## Model interpretation (SHAP)
+
+SHAP values come from LightGBM's built-in `pred_contrib` and are given in log-odds of
+default (positive values push a client towards higher risk). They were computed for
+the final model (tuned parameters, 900 trees at learning rate 0.05, trained on all
+rows) on a random sample of 20,000 training rows, so they describe how the model
+behaves, not how it generalizes. The contributions add up to the raw model score to
+floating-point precision (maximum error about 3e-14).
+
+![Mean absolute SHAP values](figures/shap_importance.png)
+![SHAP beeswarm plot](figures/shap_beeswarm.png)
+![SHAP dependence plots](figures/shap_dependence.png)
+
+Findings:
+
+- **The external scores dominate.** Mean |SHAP| is 0.29, 0.25 and 0.14 for
+  `EXT_SOURCE_2`, `EXT_SOURCE_3` and `EXT_SOURCE_1`, more than twice the next feature
+  (0.115). The effect is monotonic: the contribution falls from about +1.2 log-odds at
+  a score near 0 to about -0.5 at a score of 0.8. For `EXT_SOURCE_3` there is also a
+  separate group of clients with a score of exactly 0 and a high risk contribution;
+  whether this is a real value or a data artifact has not been checked.
+- **Remaining instalments matter.** `POS_CNT_INSTALMENT_FUTURE_MEAN` (average number
+  of remaining instalments on previous point-of-sale and cash loans) is the 4th
+  feature. Its contribution rises from about -0.1 below roughly 8 remaining
+  instalments to about +0.5 at 25-30 and then flattens. This is the feature behind the
+  small gain of `POS_CASH_balance` in the ablation.
+- **Direction of the other effects** agrees with intuition in most cases: a higher
+  current annuity, a shorter employment history, a higher debt-to-credit ratio at other
+  institutions (`BUREAU_DEBT_CREDIT_RATIO`) and a credit much larger than the goods
+  price (low `GOODS_PRICE_CREDIT_RATIO`) all increase the predicted risk. A higher
+  average annuity on previous loans (`PREV_ANNUITY_MEAN`) goes the other way: clients
+  who handled larger payments before look safer.
+- **`CODE_GENDER` ranks 5th by SHAP (0.113)** although it was not in the top 20 by
+  gain in the importance lists above. The beeswarm shows two clear clusters, one
+  category with a negative and one with a positive contribution; with categories in
+  alphabetical order (F, M, XNA) the higher-risk cluster appears to be M. In EU credit
+  decisions gender-based treatment is restricted by equal-treatment rules, so a
+  production model would need a legal and fairness review, including a check of how
+  much predictive power is lost without this feature. Here it is a public competition
+  dataset used for learning.
+
+SHAP and gain importance give different rankings (for example `EXT_SOURCE_2` is ahead
+of `EXT_SOURCE_3` by SHAP and behind it by gain), another reason to use more than one
+view of importance.
 
 ## Observations
 
@@ -172,7 +275,7 @@ comparison. This measures the marginal contribution of a group given all the oth
 
 1. Create an environment and install dependencies:
    ```bash
-   pip install lightgbm scikit-learn pandas numpy optuna
+   pip install lightgbm scikit-learn pandas numpy optuna matplotlib
    ```
 2. Download the competition data (requires a Kaggle account, an API token and
    accepting the competition rules):
@@ -192,8 +295,8 @@ comparison. This measures the marginal contribution of a group given all the oth
 - [x] Aggregates from `installments_payments` (+0.0049 CV AUC)
 - [x] Aggregates from `POS_CASH_balance` (+0.0017 CV AUC, below the noise threshold)
 - [x] Aggregates from `credit_card_balance` (+0.0026 CV AUC, borderline)
-- [ ] Hyperparameter tuning (Optuna)
-- [ ] Model interpretation with SHAP
+- [x] Hyperparameter tuning (Optuna): +0.0024 CV AUC on a new fold split
+- [x] Model interpretation with SHAP
 - [ ] Feature aggregation in SQL (DuckDB) as an alternative to Pandas
 - [x] Ablation study per feature group
 
