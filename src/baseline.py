@@ -411,7 +411,6 @@ fig_dependence = plot_dependence(
 
 # %% [markdown]
 # ## Next steps
-# 1. Record the tuning result and the SHAP findings in the README (the figures are
-#    saved in `figures/`).
+# 1. Record the fairness check in the README.
 # 2. Optionally lower the learning rate (for example 0.02-0.03) for the final model.
 # 3. Build the feature pipeline for `application_test` and submit to Kaggle.

@@ -1,7 +1,10 @@
+# Core dependencies of the Home Credit Default Risk project.
 lightgbm
 scikit-learn
 pandas
-shap
-kaggle
+numpy
 optuna
 matplotlib
+
+# Optional: only needed to run the `# %%` cells interactively in VS Code / Jupyter
+# ipykernel

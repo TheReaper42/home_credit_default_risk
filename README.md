@@ -220,11 +220,26 @@ Findings:
   decisions gender-based treatment is restricted by equal-treatment rules, so a
   production model would need a legal and fairness review, including a check of how
   much predictive power is lost without this feature. Here it is a public competition
-  dataset used for learning.
+  dataset used for learning. The cost of removing it is measured below.
 
 SHAP and gain importance give different rankings (for example `EXT_SOURCE_2` is ahead
 of `EXT_SOURCE_3` by SHAP and behind it by gain), another reason to use more than one
 view of importance.
+
+**Sensitivity check: the model without `CODE_GENDER`.** The model was retrained with
+the tuned parameters and the same folds (seed 2024) after dropping the column:
+
+| Features | CV AUC | OOF AUC |
+|----------|--------|---------|
+| With `CODE_GENDER` | 0.7896 ± 0.0023 | 0.7896 |
+| Without `CODE_GENDER` | 0.7884 ± 0.0024 | 0.7884 |
+
+Removing the feature costs **0.0014 CV AUC**, and the model without it is worse in 5
+of 5 folds: a small but consistent loss, about the size of the `POS_CASH_balance`
+group. Other features (for example occupation, family status or annuity size) can act
+as proxies, so excluding the column does not remove every gender-related signal. The
+accuracy cost is small enough that excluding the feature is a reasonable default for a
+real credit model.
 
 ## Observations
 
@@ -275,7 +290,7 @@ view of importance.
 
 1. Create an environment and install dependencies:
    ```bash
-   pip install lightgbm scikit-learn pandas numpy optuna matplotlib
+   pip install -r requirements.txt
    ```
 2. Download the competition data (requires a Kaggle account, an API token and
    accepting the competition rules):
@@ -285,6 +300,24 @@ view of importance.
    Unzip it into `data/` (this folder is git-ignored).
 3. Run `baseline.py` top to bottom. It is a plain Python script with `# %%` cells,
    so it also works as a notebook in VS Code or Jupyter.
+
+## Project structure
+
+| File | Purpose |
+|------|---------|
+| `baseline.py` | Main script with `# %%` cells: data loading, all experiments, ablation, tuning and SHAP |
+| `cv.py` | `run_cv` (stratified K-fold with LightGBM) and `compare_folds` (paired per-fold comparison) |
+| `bureau.py`, `previous.py`, `installments.py`, `pos_cash.py`, `credit_card.py` | Client-level aggregates, one module per data table |
+| `ablation.py` | Feature-group ablation |
+| `tune.py` | Optuna hyperparameter search |
+| `explain.py` | SHAP values and plots |
+| `figures/` | SHAP plots used in this README |
+| `data/` | Kaggle data (git-ignored) |
+
+The cells in `baseline.py` are meant to be run in order, because later experiments
+reuse variables from earlier ones. The heavy cells (loading the large tables, the
+ablation and the Optuna search) take minutes to tens of minutes; one Optuna trial
+takes under a minute on the author's machine.
 
 ## Roadmap
 
@@ -297,7 +330,6 @@ view of importance.
 - [x] Aggregates from `credit_card_balance` (+0.0026 CV AUC, borderline)
 - [x] Hyperparameter tuning (Optuna): +0.0024 CV AUC on a new fold split
 - [x] Model interpretation with SHAP
-- [ ] Feature aggregation in SQL (DuckDB) as an alternative to Pandas
 - [x] Ablation study per feature group
 
 ## References

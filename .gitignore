@@ -1,1 +1,24 @@
-data
+# Kaggle competition data (large, must be downloaded separately)
+data/
+*.csv
+*.zip
+
+# Optuna study storage and other local artefacts
+*.db
+submission*.csv
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Virtual environments
+local_env/
+.venv/
+venv/
+env/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
