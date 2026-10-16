@@ -15,6 +15,16 @@ feature engineering, reliable cross-validation, gradient boosting and model
 interpretation. The approach is built step by step, and every change is
 measured against the previous version.
 
+## Summary
+
+- Starting point: LightGBM on the main application table only, CV AUC 0.759.
+- Ratio features, aggregates from five more tables, hyperparameter tuning and the
+  exclusion of `CODE_GENDER` bring the local CV AUC to about 0.789.
+- Kaggle late submission (data the model has never seen): private score 0.78726,
+  public score 0.79285. The cross-validation estimate was only about 0.0014
+  optimistic. For comparison (see References), the winner reached about 0.8057 and a
+  public bronze-medal solution about 0.795.
+
 ## Data
 
 - Source: Kaggle competition data (not included in this repository, see
@@ -298,24 +308,49 @@ real credit model.
    kaggle competitions download -c home-credit-default-risk
    ```
    Unzip it into `data/` (this folder is git-ignored).
-3. Run `baseline.py` top to bottom. It is a plain Python script with `# %%` cells,
+3. Run `src/baseline.py` top to bottom. It is a plain Python script with `# %%` cells,
    so it also works as a notebook in VS Code or Jupyter.
+4. To create a Kaggle submission, run `python src/make_submission.py` (it also needs
+   `application_test.csv` in `data/`). The final model is the average of five CV fold
+   models trained with the tuned parameters and without `CODE_GENDER`.
+
+## Kaggle late submission
+
+The final model (tuned parameters, without `CODE_GENDER`, average of the five CV fold
+models, built by `make_submission.py`) was submitted late to the closed competition:
+
+| Score | Value |
+|-------|-------|
+| Private | 0.78726 |
+| Public | 0.79285 |
+| Local CV AUC (seed 42) | 0.78865 ± 0.0032 |
+| Local out-of-fold AUC | 0.78862 |
+
+The private score is 0.0014 below the local CV estimate, so the cross-validation was
+only slightly optimistic and there is no sign of leakage in the pipeline. The public
+score is about 0.0056 higher than the private one; a gap of this size between two
+parts of the same test set illustrates how noisy differences of a few thousandths
+between models are.
 
 ## Project structure
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `baseline.py` | Main script with `# %%` cells: data loading, all experiments, ablation, tuning and SHAP |
-| `cv.py` | `run_cv` (stratified K-fold with LightGBM) and `compare_folds` (paired per-fold comparison) |
-| `bureau.py`, `previous.py`, `installments.py`, `pos_cash.py`, `credit_card.py` | Client-level aggregates, one module per data table |
-| `ablation.py` | Feature-group ablation |
-| `tune.py` | Optuna hyperparameter search |
-| `explain.py` | SHAP values and plots |
+| `src/baseline.py` | Main script with `# %%` cells: data loading, all experiments, ablation, tuning and SHAP |
+| `src/cv.py` | `run_cv` (stratified K-fold with LightGBM) and `compare_folds` (paired per-fold comparison) |
+| `src/bureau.py`, `src/previous.py`, `src/installments.py`, `src/pos_cash.py`, `src/credit_card.py` | Client-level aggregates, one module per data table |
+| `src/ablation.py` | Feature-group ablation |
+| `src/tune.py` | Optuna hyperparameter search |
+| `src/explain.py` | SHAP values and plots |
+| `src/features.py` | Feature pipeline for train and test together (with an on-disk cache of the aggregates) |
+| `src/make_submission.py` | Builds the features, trains the final model and writes `submission.csv` |
 | `figures/` | SHAP plots used in this README |
 | `data/` | Kaggle data (git-ignored) |
+| `cache/` | Cached client-level aggregates (git-ignored) |
 
-The cells in `baseline.py` are meant to be run in order, because later experiments
-reuse variables from earlier ones. The heavy cells (loading the large tables, the
+The cells in `src/baseline.py` are meant to be run in order, because later experiments
+reuse variables from earlier ones. Run everything from the repository root, so that
+the relative `data/` path resolves. The heavy cells (loading the large tables, the
 ablation and the Optuna search) take minutes to tens of minutes; one Optuna trial
 takes under a minute on the author's machine.
 
@@ -330,6 +365,7 @@ takes under a minute on the author's machine.
 - [x] Aggregates from `credit_card_balance` (+0.0026 CV AUC, borderline)
 - [x] Hyperparameter tuning (Optuna): +0.0024 CV AUC on a new fold split
 - [x] Model interpretation with SHAP
+- [x] Late submission to Kaggle: private 0.78726, public 0.79285
 - [x] Ablation study per feature group
 
 ## References
@@ -341,3 +377,8 @@ material and is not my own:
 - [NoxMoon/home-credit-default-risk](https://github.com/NoxMoon/home-credit-default-risk)
   (simplified version of a gold-medal solution)
 - [1st place solution write-up](https://www.kaggle.com/competitions/home-credit-default-risk/writeups/home-aloan-1st-place-solution)
+- [jonthemango/big-data](https://github.com/jonthemango/big-data): a public project
+  that reports the winning score of about 0.8057 (used for comparison only)
+- [jamesdellinger/kaggle_home_credit_default_risk_competition](https://github.com/jamesdellinger/kaggle_home_credit_default_risk_competition):
+  a public top-8% LightGBM solution with a private score of about 0.795 (used for
+  comparison only)

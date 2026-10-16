@@ -35,6 +35,7 @@ class CVResult:
     oof: np.ndarray
     oof_auc: float
     importances: pd.DataFrame  # one column per fold plus a "mean" column
+    test_pred: np.ndarray | None = None  # mean of the fold models' test predictions
 
     @property
     def cv_mean(self) -> float:
@@ -58,6 +59,7 @@ def run_cv(
     early_stopping_rounds: int = 100,
     verbose: bool = True,
     on_fold: Callable[[int, list[float]], None] | None = None,
+    X_test: pd.DataFrame | None = None,
 ) -> CVResult:
     """Stratified K-fold CV with LightGBM; returns per-fold AUCs, OOF predictions
     and feature importances.
@@ -67,11 +69,15 @@ def run_cv(
 
     `on_fold(fold, fold_aucs)`, if given, is called after every finished fold
     (used for early pruning during hyperparameter search).
+
+    `X_test`, if given, is predicted by every fold model; the mean of these
+    predictions is returned in `CVResult.test_pred`.
     """
     model_params = {**DEFAULT_PARAMS, **(params or {}), "random_state": seed}
 
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     oof = np.zeros(len(X))
+    test_pred = np.zeros(len(X_test)) if X_test is not None else None
     fold_aucs: list[float] = []
     importances = pd.DataFrame(index=X.columns)
 
@@ -92,6 +98,8 @@ def run_cv(
         )
 
         oof[va_idx] = model.predict_proba(X_va)[:, 1]
+        if X_test is not None:
+            test_pred += model.predict_proba(X_test)[:, 1] / n_folds
         auc = roc_auc_score(y_va, oof[va_idx])
         fold_aucs.append(auc)
         importances[f"fold_{fold}"] = model.feature_importances_
@@ -106,6 +114,7 @@ def run_cv(
         oof=oof,
         oof_auc=float(roc_auc_score(y, oof)),
         importances=importances,
+        test_pred=test_pred,
     )
     if verbose:
         print(f"\nCV AUC: {result.cv_mean:.5f} +/- {result.cv_std:.5f}")

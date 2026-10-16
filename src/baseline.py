@@ -59,26 +59,8 @@ print(res_base.summary_row("Baseline: raw application_train columns"))
 # ablated independently.
 
 # %%
-RATIO_COLS = [
-    "CREDIT_INCOME_RATIO",
-    "ANNUITY_INCOME_RATIO",
-    "CREDIT_ANNUITY_RATIO",
-    "GOODS_PRICE_CREDIT_RATIO",
-    "EMPLOYED_BIRTH_RATIO",
-]
-
-
-def add_ratio_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Add ratio features; division by zero becomes NaN instead of inf."""
-    out = data.copy()
-    out["CREDIT_INCOME_RATIO"] = out["AMT_CREDIT"] / out["AMT_INCOME_TOTAL"]
-    out["ANNUITY_INCOME_RATIO"] = out["AMT_ANNUITY"] / out["AMT_INCOME_TOTAL"]
-    out["CREDIT_ANNUITY_RATIO"] = out["AMT_CREDIT"] / out["AMT_ANNUITY"]
-    out["GOODS_PRICE_CREDIT_RATIO"] = out["AMT_GOODS_PRICE"] / out["AMT_CREDIT"]
-    out["EMPLOYED_BIRTH_RATIO"] = out["DAYS_EMPLOYED"] / out["DAYS_BIRTH"]
-    out[RATIO_COLS] = out[RATIO_COLS].replace([np.inf, -np.inf], np.nan)
-    return out
-
+# The ratio features live in features.py, shared with make_submission.py
+from features import RATIO_COLS, add_ratio_features
 
 X_ratios = add_ratio_features(X_base)
 
@@ -408,6 +390,27 @@ fig_dependence = plot_dependence(
     top_numeric_features(shap_vals, X_shap, n=4),
     path="figures/shap_dependence.png",
 )
+
+# %% [markdown]
+# ## 15. Fairness check: the model without CODE_GENDER
+# SHAP ranks `CODE_GENDER` 5th. Gender-based treatment in credit decisions is
+# restricted in the EU, so this checks how much predictive power is lost without it.
+# Same tuned parameters and the same folds (EVAL_SEED) as `res_tuned` in section 13,
+# so the comparison is paired. Requires `study`, `FINAL_LR`, `EVAL_SEED` and
+# `res_tuned` from section 13.
+
+# %%
+print("CODE_GENDER categories:", list(X_cc["CODE_GENDER"].cat.categories))
+
+# %%
+res_no_gender = run_cv(
+    X_cc.drop(columns=["CODE_GENDER"]),
+    y,
+    params={**study.best_params, "learning_rate": FINAL_LR},
+    seed=EVAL_SEED,
+)
+print(res_no_gender.summary_row("Tuned parameters, without CODE_GENDER"))
+compare_folds(res_no_gender, res_tuned, "without CODE_GENDER", "with CODE_GENDER")
 
 # %% [markdown]
 # ## Next steps
